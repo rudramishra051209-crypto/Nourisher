@@ -9,6 +9,7 @@ import {
   MealItem, 
   MealAlternative 
 } from '../types';
+import { getGenuinePersonalizedMeals, getGenuinePersonalizedAlternatives } from '../data/dishesCatalog';
 
 export interface MacroBreakdown {
   protein: number;       // in grams
@@ -200,20 +201,29 @@ export function calculatePersonalizedNutrition(input: NutritionEngineInput): Nut
     fatsPct,
   };
 
-  // 8. Generate 4 Personalized Meals Scaled to Calorie Tier & Budget
-  const meals = generateDynamicMeals({
+  // 8. Generate 4 Personalized Meals Scaled to Age, Calorie Tier, Goal & Budget
+  const meals = getGenuinePersonalizedMeals({
+    ageGroup,
+    ageNum,
     foodStyle,
-    calorieTier,
-    budgetCategory,
-    energyGoal,
     mainGoal,
+    energyGoal,
+    budgetCategory,
+    budgetTier: budget,
+    calorieTier,
     targetCalories,
     targetProtein,
     weightNum,
   });
 
-  // 9. Generate Contextual Alternatives
-  const alternatives = generateDynamicAlternatives(foodStyle, budgetCategory, calorieTier);
+  // 9. Generate Contextual Alternatives tailored to Age, Style, and Goal
+  const alternatives = getGenuinePersonalizedAlternatives(
+    ageGroup,
+    foodStyle,
+    budgetCategory,
+    calorieTier,
+    mainGoal
+  );
 
   // 10. Budget Execution Strategy Text
   const budgetExecutionPlan = getDynamicBudgetText(budget, budgetCategory, foodStyle);

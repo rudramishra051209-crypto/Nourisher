@@ -11,6 +11,7 @@ interface SavedPlansModalProps {
   savedProfiles: UserProfile[];
   onSelectProfile: (profile: UserProfile) => void;
   onDeleteProfile: (id: string) => void;
+  onClearAllProfiles?: () => void;
 }
 
 export const SavedPlansModal: React.FC<SavedPlansModalProps> = ({
@@ -19,6 +20,7 @@ export const SavedPlansModal: React.FC<SavedPlansModalProps> = ({
   savedProfiles,
   onSelectProfile,
   onDeleteProfile,
+  onClearAllProfiles,
 }) => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
@@ -202,7 +204,21 @@ export const SavedPlansModal: React.FC<SavedPlansModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="pt-4 border-t border-slate-100 dark:border-[#1C2436] mt-4 flex justify-end">
+          <div className="pt-4 border-t border-slate-100 dark:border-[#1C2436] mt-4 flex items-center justify-between">
+            {savedProfiles.length > 0 && onClearAllProfiles ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Are you sure you want to delete all saved profiles from this device?')) {
+                    onClearAllProfiles();
+                  }
+                }}
+                className="text-xs text-red-500 hover:text-red-600 hover:underline flex items-center gap-1.5 transition cursor-pointer font-medium"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Clear All Profiles
+              </button>
+            ) : <div />}
             <button
               type="button"
               onClick={onClose}

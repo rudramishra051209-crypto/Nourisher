@@ -212,7 +212,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                 type="text"
                 value={userName}
                 onChange={(e) => setUserName(e.target.value)}
-                placeholder="e.g., Rudra Mishra"
+                placeholder="e.g., David Miller"
                 className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
               />
             </div>
@@ -228,7 +228,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                 type="text"
                 value={userContact}
                 onChange={(e) => setUserContact(e.target.value)}
-                placeholder="e.g., rudra@example.com or +91..."
+                placeholder="e.g., david.miller@example.com or +1 (555) 019-2834"
                 className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
               />
             </div>

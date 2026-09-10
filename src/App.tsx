@@ -64,31 +64,7 @@ export default function App() {
     return [];
   });
 
-  // Restore cached profile on first load
-  useEffect(() => {
-    try {
-      const cached = localStorage.getItem('nourish_profile_v1_merged');
-      if (cached) {
-        const parsed: UserProfile = JSON.parse(cached);
-        setActiveProfile(parsed);
-        if (parsed.name && !parsed.name.includes('•')) setUserName(parsed.name);
-        if (parsed.contact) setUserContact(parsed.contact);
-        if (parsed.notes) setUserNotes(parsed.notes);
-        if (parsed.ageGroup) setAgeGroup(parsed.ageGroup);
-        if (parsed.age) setExactAge(parsed.age);
-        if (parsed.height) setHeight(parsed.height);
-        if (parsed.weight) setWeight(parsed.weight);
-        if (parsed.sex) setSex(parsed.sex);
-        if (parsed.activity) setActivity(parsed.activity);
-        if (parsed.foodStyle) setFoodStyle(parsed.foodStyle);
-        if (parsed.mainGoal) setMainGoal(parsed.mainGoal);
-        if (parsed.energyGoal) setEnergyGoal(parsed.energyGoal);
-        if (parsed.budget) setBudget(parsed.budget);
-      }
-    } catch (e) {
-      console.error('Error loading cached profile', e);
-    }
-  }, []);
+  // Keep form clean and empty on initial refresh as per user requirements
 
   const handleBuildPlan = () => {
     if (!ageGroup) {
@@ -241,10 +217,58 @@ export default function App() {
     setSavedProfiles((prev) => {
       const filtered = prev.filter((p) => p.id !== id);
       try {
-        localStorage.setItem('nourish_saved_profiles_v1', JSON.stringify(filtered));
+        if (filtered.length > 0) {
+          localStorage.setItem('nourish_saved_profiles_v1', JSON.stringify(filtered));
+        } else {
+          localStorage.removeItem('nourish_saved_profiles_v1');
+        }
       } catch (e) {}
       return filtered;
     });
+
+    if (activeProfile?.id === id) {
+      setActiveProfile(null);
+      setShowResults(false);
+      setUserName('');
+      setUserContact('');
+      setUserNotes('');
+      setAgeGroup('');
+      setExactAge('');
+      setHeight('');
+      setWeight('');
+      setSex('');
+      setActivity('');
+      setFoodStyle('');
+      setMainGoal('');
+      setEnergyGoal('');
+      setBudget('');
+      try {
+        localStorage.removeItem('nourish_profile_v1_merged');
+      } catch (e) {}
+    }
+  };
+
+  const handleClearAllProfiles = () => {
+    setSavedProfiles([]);
+    setActiveProfile(null);
+    setShowResults(false);
+    setUserName('');
+    setUserContact('');
+    setUserNotes('');
+    setAgeGroup('');
+    setExactAge('');
+    setHeight('');
+    setWeight('');
+    setSex('');
+    setActivity('');
+    setFoodStyle('');
+    setMainGoal('');
+    setEnergyGoal('');
+    setBudget('');
+    try {
+      localStorage.removeItem('nourish_saved_profiles_v1');
+      localStorage.removeItem('nourish_profile_v1_merged');
+    } catch (e) {}
   };
 
   return (
@@ -343,6 +367,7 @@ export default function App() {
           savedProfiles={savedProfiles}
           onSelectProfile={handleSelectSavedProfile}
           onDeleteProfile={handleDeleteSavedProfile}
+          onClearAllProfiles={handleClearAllProfiles}
         />
 
         {/* Admin Intelligence & Interactions Portal */}

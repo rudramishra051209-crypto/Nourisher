@@ -389,7 +389,12 @@ export const PlanResults: React.FC<PlanResultsProps> = ({
                     <span className="text-[10px] font-mono font-bold tracking-widest text-slate-500 dark:text-[#94A3B8] uppercase">
                       {meal.mealName}
                     </span>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {meal.priceCategory && (
+                        <span className="inline-block px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-amber-700 dark:text-amber-300 text-[10px] font-mono font-semibold">
+                          {meal.priceCategory}
+                        </span>
+                      )}
                       {meal.caloriesEstimate && (
                         <span className="inline-block px-2 py-0.5 rounded-full bg-slate-100 dark:bg-[#171E2D] text-slate-700 dark:text-[#CBD5E1] text-[10px] font-mono font-semibold">
                           {meal.caloriesEstimate}
@@ -401,9 +406,16 @@ export const PlanResults: React.FC<PlanResultsProps> = ({
                     </div>
                   </div>
 
-                  <div className="text-[10px] font-mono text-slate-500 dark:text-[#64748B] uppercase tracking-wider mb-2 flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-emerald-600 dark:text-[#CCFF00]" />
-                    <span>{timingCue}</span>
+                  <div className="flex items-center gap-2 flex-wrap mb-2 text-[10px] font-mono text-slate-500 dark:text-[#64748B] uppercase tracking-wider">
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-emerald-600 dark:text-[#CCFF00]" />
+                      <span>{meal.prepTime ? `Prep: ${meal.prepTime}` : timingCue}</span>
+                    </div>
+                    {meal.ageSuitability && (
+                      <span className="text-emerald-700 dark:text-[#CCFF00]/80">
+                        • {meal.ageSuitability}
+                      </span>
+                    )}
                   </div>
 
                   <h4 className="font-['Outfit'] text-base font-bold text-slate-950 dark:text-white mb-2 leading-snug">
