@@ -8,6 +8,17 @@ import {
   clearAllInteractions, 
   syncGoogleSheetUrl 
 } from '../utils/interactionsStorage';
+import { 
+  requestGoogleAccessToken, 
+  autoConnectOrCreateSheet, 
+  fetchInteractionsFromGoogleSheet, 
+  getConnectedSheetInfo, 
+  disconnectGoogleSheets, 
+  saveConnectedSheetInfo,
+  appendInteractionToGoogleSheet,
+  ConnectedSheetInfo,
+  getStoredGoogleToken
+} from '../utils/googleSheetsService';
 import { exportInteractionsToExcel } from '../utils/excelExporter';
 import { 
   Shield, 
@@ -19,7 +30,6 @@ import {
   Users, 
   FileSpreadsheet, 
   Eye, 
-  AlertTriangle,
   Calendar,
   Phone,
   Mail,
@@ -32,7 +42,10 @@ import {
   Check,
   Send,
   ExternalLink,
-  Table
+  Table,
+  Link as LinkIcon,
+  Unlink,
+  CheckCheck
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -49,7 +62,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
   const [interactions, setInteractions] = useState<UserInteraction[]>([]);
   const [isServerConnected, setIsServerConnected] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'interactions' | 'webhooks'>('interactions');
+  const [activeTab, setActiveTab] = useState<'interactions' | 'sheets' | 'webhooks'>('interactions');
+
+  // Google Sheets Connection State
+  const [connectedSheet, setConnectedSheet] = useState<ConnectedSheetInfo | null>(() => getConnectedSheetInfo());
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState<boolean>(false);
+  const [googleActionMessage, setGoogleActionMessage] = useState<{ text: string; isError?: boolean } | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -62,7 +80,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
   const [isConfirmingClear, setIsConfirmingClear] = useState<boolean>(false);
   const [exportSuccess, setExportSuccess] = useState<boolean>(false);
 
-  // Google Sheets sync state
+  // Google Sheets sync state for manual CSV URL
   const [sheetUrlInput, setSheetUrlInput] = useState<string>('');
   const [sheetSyncStatus, setSheetSyncStatus] = useState<{ loading: boolean; message?: string; isError?: boolean }>({ loading: false });
 
@@ -76,25 +94,55 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
   const googleFormWebhookUrl = `${origin}/api/webhook/google-forms`;
   const universalWebhookUrl = `${origin}/api/webhook/form-fill`;
 
-  // Fetch data centrally
+  // Fetch data centrally (both from server and from connected Google Sheet)
   const refreshData = async () => {
     setIsLoading(true);
-    const result = await fetchCentralizedInteractions();
-    setInteractions(result.interactions);
-    setIsServerConnected(result.isServerConnected);
-    setIsLoading(false);
+    try {
+      const result = await fetchCentralizedInteractions();
+      let combined = [...result.interactions];
+      setIsServerConnected(result.isServerConnected);
+
+      // If Google Sheet is connected and token is available, also sync from Google Sheet
+      const token = getStoredGoogleToken();
+      if (token && connectedSheet?.spreadsheetId) {
+        try {
+          const sheetRows = await fetchInteractionsFromGoogleSheet(token, connectedSheet.spreadsheetId);
+          if (sheetRows.length > 0) {
+            // Merge sheet rows with server interactions, avoiding duplicates
+            const existingKeys = new Set(combined.map((x) => `${x.name}_${x.timestamp}`));
+            sheetRows.forEach((r) => {
+              const key = `${r.name}_${r.timestamp}`;
+              if (!existingKeys.has(key)) {
+                combined.unshift(r);
+                existingKeys.add(key);
+              }
+            });
+            // Update last synced
+            setConnectedSheet((prev) => (prev ? { ...prev, lastSyncedAt: new Date().toLocaleString() } : null));
+          }
+        } catch (sheetErr) {
+          console.warn('Google Sheet live sync note:', sheetErr);
+        }
+      }
+
+      setInteractions(combined);
+    } catch (err) {
+      console.error('Refresh error:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
     if (isOpen && isAuthenticated) {
       refreshData();
-      // Auto poll every 12 seconds so new submissions from other devices/forms appear automatically
+      // Auto poll every 12 seconds
       const timer = setInterval(() => {
         refreshData();
       }, 12000);
       return () => clearInterval(timer);
     }
-  }, [isOpen, isAuthenticated]);
+  }, [isOpen, isAuthenticated, connectedSheet?.spreadsheetId]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,7 +153,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
       setPasswordInput('');
       refreshData();
     } else {
-      setAuthError('Incorrect admin password. (Password can be updated in src/config/adminConfig.ts)');
+      setAuthError('Incorrect admin password. (Password configured in src/config/adminConfig.ts)');
     }
   };
 
@@ -113,6 +161,102 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
     setIsAuthenticated(false);
     sessionStorage.removeItem('nourish_admin_auth');
     setPasswordInput('');
+  };
+
+  // Connect Google Sheets automatically with configured Gmail ID
+  const handleAutoConnectGoogleSheets = async () => {
+    setIsConnectingGoogle(true);
+    setGoogleActionMessage(null);
+
+    try {
+      // 1. Request access token with hint prefilled to user's Gmail ID
+      const { accessToken, userEmail } = await requestGoogleAccessToken(ADMIN_CONFIG.GOOGLE.GMAIL_ID);
+
+      // 2. Auto-find or create the centralized spreadsheet in user's Drive
+      const sheetInfo = await autoConnectOrCreateSheet(accessToken);
+      sheetInfo.userEmail = userEmail || ADMIN_CONFIG.GOOGLE.GMAIL_ID;
+      setConnectedSheet(sheetInfo);
+
+      // 3. Immediately pull rows from the sheet
+      try {
+        const rows = await fetchInteractionsFromGoogleSheet(accessToken, sheetInfo.spreadsheetId);
+        if (rows.length > 0) {
+          setInteractions((prev) => {
+            const existingKeys = new Set(prev.map((x) => `${x.name}_${x.timestamp}`));
+            const merged = [...prev];
+            rows.forEach((r) => {
+              if (!existingKeys.has(`${r.name}_${r.timestamp}`)) {
+                merged.unshift(r);
+              }
+            });
+            return merged;
+          });
+        }
+      } catch {
+        // empty sheet is normal on first creation
+      }
+
+      setGoogleActionMessage({
+        text: `Connected successfully to Google Sheet: "${sheetInfo.sheetTitle}" (${sheetInfo.userEmail})!`,
+        isError: false,
+      });
+    } catch (err: any) {
+      console.error('Google Sheets connect error:', err);
+      setGoogleActionMessage({
+        text: err.message || 'Failed to authenticate with Google. Make sure popups are allowed.',
+        isError: true,
+      });
+    } finally {
+      setIsConnectingGoogle(false);
+    }
+  };
+
+  const handleDisconnectGoogleSheets = () => {
+    disconnectGoogleSheets();
+    setConnectedSheet(null);
+    setGoogleActionMessage({
+      text: 'Google Sheets disconnected from this session.',
+      isError: false,
+    });
+  };
+
+  const handleSyncGoogleSheetLive = async () => {
+    if (!connectedSheet?.spreadsheetId) return;
+    setIsLoading(true);
+    setGoogleActionMessage(null);
+
+    try {
+      let token = getStoredGoogleToken();
+      if (!token) {
+        const authRes = await requestGoogleAccessToken(ADMIN_CONFIG.GOOGLE.GMAIL_ID);
+        token = authRes.accessToken;
+      }
+
+      const rows = await fetchInteractionsFromGoogleSheet(token, connectedSheet.spreadsheetId);
+      setInteractions((prev) => {
+        const existingKeys = new Set(prev.map((x) => `${x.name}_${x.timestamp}`));
+        const merged = [...prev];
+        let added = 0;
+        rows.forEach((r) => {
+          if (!existingKeys.has(`${r.name}_${r.timestamp}`)) {
+            merged.unshift(r);
+            added++;
+          }
+        });
+        setGoogleActionMessage({
+          text: `Synced with Google Sheet! Loaded ${rows.length} total rows (${added} new entries).`,
+          isError: false,
+        });
+        return merged;
+      });
+    } catch (err: any) {
+      setGoogleActionMessage({
+        text: `Sync error: ${err.message}`,
+        isError: true,
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -136,7 +280,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
     setTimeout(() => setExportSuccess(false), 3000);
   };
 
-  // Google Sheet manual sync
+  // Google Sheet manual CSV sync
   const handleSyncGoogleSheet = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sheetUrlInput.trim()) return;
@@ -162,9 +306,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
       const testNames = ['Vikram Rathore', 'Simran Kaur', 'Aditya Sen', 'Tanvi Mehta'];
       const randomName = testNames[Math.floor(Math.random() * testNames.length)];
       
-      const payload = {
+      const payload: UserInteraction = {
+        id: `test-${Date.now()}`,
+        timestamp: new Date().toLocaleString(),
         name: randomName,
-        contact: `${randomName.toLowerCase().replace(/\s+/g, '.')}@webhook-demo.com`,
+        contact: `${randomName.toLowerCase().replace(/\s+/g, '.')}@googleform-test.com`,
         notes: 'Submitted via external Google Form webhook trigger',
         ageGroup: '18–25',
         exactAge: '23',
@@ -186,6 +332,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      // Also append to connected Google Sheet if connected
+      if (connectedSheet) {
+        appendInteractionToGoogleSheet(payload).catch(console.warn);
+      }
 
       if (res.ok) {
         setTestWebhookStatus({ loading: false, message: `Success! Created test record for "${randomName}". Updating live feed...` });
@@ -315,19 +466,21 @@ function onFormSubmit(e) {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="font-['Outfit'] font-black text-base sm:text-lg text-slate-950 dark:text-white uppercase tracking-tight">
-                    Centralized Admin Intelligence Portal
+                    Centralized Admin Portal
                   </h3>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase flex items-center gap-1.5 ${
-                    isServerConnected
+                    connectedSheet
                       ? 'bg-emerald-100 dark:bg-[#CCFF00]/20 text-emerald-800 dark:text-[#CCFF00]'
+                      : isServerConnected
+                      ? 'bg-blue-100 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300'
                       : 'bg-amber-100 text-amber-800'
                   }`}>
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-[#CCFF00] animate-pulse" />
-                    {isServerConnected ? 'Central Server Live' : 'Offline Cache'}
+                    {connectedSheet ? 'Google Sheets Connected' : isServerConnected ? 'Central Server Live' : 'Offline Cache'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-[#94A3B8]">
-                  Centralized multi-device database • Live Google Forms & Webhooks synchronization
+                  Auto-synced with <span className="font-mono text-emerald-700 dark:text-[#CCFF00]">{ADMIN_CONFIG.GOOGLE.GMAIL_ID}</span> • Live Google Forms & Sheets
                 </p>
               </div>
             </div>
@@ -363,7 +516,7 @@ function onFormSubmit(e) {
                 Admin Authentication
               </h4>
               <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed mb-6">
-                Enter the administrator password to access the centralized interaction logs, manage multi-channel Google Forms connections, and export Excel datasets.
+                Enter the administrator password to manage Google Sheets synchronization, view submissions from any website/form, and export Excel reports.
               </p>
 
               <form onSubmit={handleLogin} className="w-full space-y-4">
@@ -396,11 +549,15 @@ function onFormSubmit(e) {
                 </button>
               </form>
 
-              <div className="mt-8 p-3 rounded-xl bg-slate-100/80 dark:bg-[#121824] border border-slate-200 dark:border-[#1E2638] text-[11px] text-slate-500 dark:text-[#64748B] w-full text-left">
-                <span className="font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
-                  Code-Configured Password:
-                </span>
-                Editable in <code className="text-emerald-700 dark:text-[#CCFF00] font-mono">src/config/adminConfig.ts</code>. Default password is <code className="text-slate-800 dark:text-white font-bold font-mono">admin123</code>.
+              <div className="mt-8 p-3 rounded-xl bg-slate-100/80 dark:bg-[#121824] border border-slate-200 dark:border-[#1E2638] text-[11px] text-slate-500 dark:text-[#64748B] w-full text-left space-y-1">
+                <div>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Admin Password: </span>
+                  <code className="text-slate-800 dark:text-white font-bold font-mono">admin123</code> (in <code className="text-emerald-700 dark:text-[#CCFF00] font-mono">src/config/adminConfig.ts</code>)
+                </div>
+                <div>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Target Gmail ID: </span>
+                  <code className="text-emerald-700 dark:text-[#CCFF00] font-mono">{ADMIN_CONFIG.GOOGLE.GMAIL_ID}</code>
+                </div>
               </div>
             </div>
           ) : (
@@ -419,7 +576,23 @@ function onFormSubmit(e) {
                     }`}
                   >
                     <Table className="w-4 h-4" />
-                    <span>Centralized Submissions ({interactions.length})</span>
+                    <span>Submissions ({interactions.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('sheets')}
+                    className={`flex items-center gap-2 px-4 py-2.5 text-xs font-['Outfit'] font-bold uppercase tracking-wider transition border-b-2 cursor-pointer ${
+                      activeTab === 'sheets'
+                        ? 'border-emerald-600 dark:border-[#CCFF00] text-emerald-800 dark:text-[#CCFF00]'
+                        : 'border-transparent text-slate-500 hover:text-slate-950 dark:hover:text-white'
+                    }`}
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Google Sheet Auto-Sync</span>
+                    {connectedSheet && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-[#CCFF00] animate-pulse" />
+                    )}
                   </button>
 
                   <button
@@ -432,10 +605,7 @@ function onFormSubmit(e) {
                     }`}
                   >
                     <Radio className="w-4 h-4" />
-                    <span>Google Forms & Webhook Setup</span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/10 dark:bg-[#CCFF00]/15 text-emerald-700 dark:text-[#CCFF00] text-[9px] font-mono">
-                      Auto-Sync
-                    </span>
+                    <span>Google Forms Integration</span>
                   </button>
                 </div>
 
@@ -444,22 +614,99 @@ function onFormSubmit(e) {
                     type="button"
                     onClick={refreshData}
                     disabled={isLoading}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046] text-xs text-slate-600 dark:text-[#94A3B8] hover:text-slate-950 dark:hover:text-white transition cursor-pointer"
-                    title="Live poll data from central database"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046] text-xs text-slate-600 dark:text-[#94A3B8] hover:text-slate-950 dark:hover:text-white transition cursor-pointer"
+                    title="Live poll data from central database & connected Google Sheet"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-                    <span className="hidden sm:inline text-[11px] font-mono">Refresh</span>
+                    <span className="hidden sm:inline text-[11px] font-mono">Live Sync</span>
                   </button>
                 </div>
               </div>
 
-              {activeTab === 'interactions' ? (
+              {/* Notification Banner */}
+              {googleActionMessage && (
+                <div className={`px-5 py-2.5 text-xs flex items-center justify-between border-b ${
+                  googleActionMessage.isError
+                    ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/40 text-red-800 dark:text-red-300'
+                    : 'bg-emerald-50 dark:bg-[#CCFF00]/10 border-emerald-200 dark:border-[#CCFF00]/20 text-emerald-900 dark:text-[#CCFF00]'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {googleActionMessage.isError ? (
+                      <X className="w-4 h-4 text-red-500" />
+                    ) : (
+                      <CheckCheck className="w-4 h-4 text-emerald-600 dark:text-[#CCFF00]" />
+                    )}
+                    <span>{googleActionMessage.text}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGoogleActionMessage(null)}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* TAB 1: SUBMISSIONS TABLE */}
+              {activeTab === 'interactions' && (
                 <>
+                  {/* Google Sheet Quick Sync Banner */}
+                  {connectedSheet ? (
+                    <div className="px-5 py-2.5 bg-emerald-50/70 dark:bg-[#131A26] border-b border-emerald-100 dark:border-[#1E2638] flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-[#CCFF00]" />
+                        <span className="text-slate-700 dark:text-slate-300 font-medium">
+                          Active Google Sheet: <strong className="text-slate-950 dark:text-white font-['Outfit']">{connectedSheet.sheetTitle}</strong>
+                        </span>
+                        <span className="text-slate-400 font-mono text-[11px]">({connectedSheet.userEmail})</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={connectedSheet.spreadsheetUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#1D2638] border border-slate-200 dark:border-[#2C3850] text-[11px] font-bold text-emerald-700 dark:text-[#CCFF00] hover:underline"
+                        >
+                          <span>Open in Google Sheets</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleSyncGoogleSheetLive}
+                          disabled={isLoading}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 dark:bg-[#CCFF00] text-white dark:text-slate-950 text-[11px] font-bold font-['Outfit'] uppercase transition cursor-pointer"
+                        >
+                          Pull Rows Now
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="px-5 py-2.5 bg-amber-50/70 dark:bg-[#161A22] border-b border-amber-100 dark:border-[#222B3D] flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <LinkIcon className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                        <span className="text-slate-700 dark:text-slate-300">
+                          Google Sheet is not connected. Connect with <code className="font-mono font-bold text-slate-950 dark:text-white">{ADMIN_CONFIG.GOOGLE.GMAIL_ID}</code> to save all form fills into your Google Drive spreadsheet!
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAutoConnectGoogleSheets}
+                        disabled={isConnectingGoogle}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 dark:bg-[#CCFF00] dark:hover:bg-[#BAE600] text-white dark:text-slate-950 text-[11px] font-black font-['Outfit'] uppercase transition cursor-pointer shadow-xs"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span>{isConnectingGoogle ? 'Connecting...' : 'Connect Google Sheet Now'}</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* Top Stats Ribbon */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 sm:p-5 bg-slate-50/40 dark:bg-[#101522] border-b border-slate-200 dark:border-[#1E2638]">
                     <div className="p-3.5 rounded-2xl bg-white dark:bg-[#141A28] border border-slate-200 dark:border-[#20293D]">
                       <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-[#94A3B8] uppercase block">
-                        Total Submissions (All Devices)
+                        Total Submissions
                       </span>
                       <p className="text-2xl font-['Space_Grotesk'] font-bold text-slate-950 dark:text-white mt-0.5">
                         {metrics.total}
@@ -515,7 +762,7 @@ function onFormSubmit(e) {
                         className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046] text-xs text-slate-700 dark:text-slate-300 focus:outline-none"
                       >
                         <option value="all">All Sources</option>
-                        <option value="google-form">Google Forms</option>
+                        <option value="google-form">Google Forms / Sheets</option>
                         <option value="website">Nourish Pro Web</option>
                         <option value="external">External Form Fills</option>
                       </select>
@@ -584,10 +831,10 @@ function onFormSubmit(e) {
                       <div className="text-center py-16">
                         <Users className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
                         <p className="font-['Outfit'] font-bold text-sm text-slate-700 dark:text-slate-300">
-                          No matching visitor interactions found.
+                          No matching athlete submissions found.
                         </p>
                         <p className="text-xs text-slate-400 mt-1">
-                          Try clearing filters or search terms, or trigger a submission from your Google Form.
+                          Try adjusting filters or connecting your Google Sheet to pull entries.
                         </p>
                       </div>
                     ) : (
@@ -606,7 +853,7 @@ function onFormSubmit(e) {
                             </thead>
                             <tbody className="divide-y divide-slate-100 dark:divide-[#192234]">
                               {filteredInteractions.map((item) => {
-                                const isGoogleForm = item.source?.toLowerCase().includes('google');
+                                const isGoogle = item.source?.toLowerCase().includes('google');
                                 const isExternal = item.source?.toLowerCase().includes('external');
 
                                 return (
@@ -621,13 +868,13 @@ function onFormSubmit(e) {
                                       </div>
                                       <div className="mt-1">
                                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase ${
-                                          isGoogleForm
+                                          isGoogle
                                             ? 'bg-purple-100 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40'
                                             : isExternal
                                             ? 'bg-blue-100 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800/40'
                                             : 'bg-emerald-100 dark:bg-[#CCFF00]/15 text-emerald-900 dark:text-[#CCFF00] border border-emerald-300 dark:border-[#CCFF00]/30'
                                         }`}>
-                                          {isGoogleForm && <FileText className="w-2.5 h-2.5" />}
+                                          {isGoogle && <FileText className="w-2.5 h-2.5" />}
                                           {isExternal && <Globe className="w-2.5 h-2.5" />}
                                           <span>{item.source || 'Nourish Pro Web'}</span>
                                         </span>
@@ -707,127 +954,118 @@ function onFormSubmit(e) {
                     )}
                   </div>
                 </>
-              ) : (
-                /* WEBHOOKS & GOOGLE FORMS TAB */
+              )}
+
+              {/* TAB 2: GOOGLE SHEETS LIVE CONNECTION */}
+              {activeTab === 'sheets' && (
                 <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
-                  {/* Google Forms Direct Connection Card */}
-                  <div className="p-5 sm:p-6 rounded-2xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
-                    <div className="flex items-start justify-between gap-4 mb-4">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="w-7 h-7 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold">
-                            <FileText className="w-4 h-4" />
-                          </div>
-                          <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
-                            Google Forms Real-Time Webhook
-                          </h4>
+                  {/* Connection Manager Card */}
+                  <div className="p-6 rounded-3xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 dark:bg-[#CCFF00]/15 text-emerald-600 dark:text-[#CCFF00] flex items-center justify-center border border-emerald-500/20 dark:border-[#CCFF00]/30">
+                          <FileSpreadsheet className="w-6 h-6" />
                         </div>
+                        <div>
+                          <h4 className="font-['Outfit'] font-black text-lg text-slate-950 dark:text-white uppercase tracking-tight">
+                            Google Sheets Live Auto-Sync
+                          </h4>
+                          <p className="text-xs text-slate-500 dark:text-[#94A3B8]">
+                            Centralized cloud storage via your authorized Google Account (<code className="font-mono text-emerald-700 dark:text-[#CCFF00]">{ADMIN_CONFIG.GOOGLE.GMAIL_ID}</code>)
+                          </p>
+                        </div>
+                      </div>
+
+                      {connectedSheet ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSyncGoogleSheetLive}
+                            disabled={isLoading}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 dark:bg-[#CCFF00] dark:hover:bg-[#BAE600] text-white dark:text-slate-950 font-['Outfit'] font-black text-xs uppercase tracking-wider transition cursor-pointer shadow-xs"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                            <span>Sync Now</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDisconnectGoogleSheets}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-200 dark:bg-[#1C2436] hover:bg-red-100 hover:text-red-600 text-xs font-['Outfit'] font-bold text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                          >
+                            <Unlink className="w-3.5 h-3.5" />
+                            <span>Disconnect</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleAutoConnectGoogleSheets}
+                          disabled={isConnectingGoogle}
+                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 dark:bg-[#CCFF00] dark:hover:bg-[#BAE600] text-white dark:text-slate-950 font-['Outfit'] font-black text-xs uppercase tracking-wider transition cursor-pointer shadow-md"
+                        >
+                          <FileSpreadsheet className="w-4 h-4" />
+                          <span>{isConnectingGoogle ? 'Authorizing Google...' : `Auto-Connect with ${ADMIN_CONFIG.GOOGLE.GMAIL_ID}`}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Connected Status Box */}
+                    {connectedSheet ? (
+                      <div className="p-4 rounded-2xl bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046] space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-[#1E2638] pb-3">
+                          <div>
+                            <span className="text-[10px] font-mono uppercase text-emerald-700 dark:text-[#CCFF00] font-bold block">
+                              Connected Spreadsheet
+                            </span>
+                            <span className="font-['Outfit'] font-bold text-base text-slate-950 dark:text-white">
+                              {connectedSheet.sheetTitle}
+                            </span>
+                          </div>
+                          <a
+                            href={connectedSheet.spreadsheetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-[#CCFF00]/10 text-emerald-800 dark:text-[#CCFF00] border border-emerald-200 dark:border-[#CCFF00]/30 text-xs font-['Outfit'] font-bold hover:underline"
+                          >
+                            <span>Open in Google Sheets</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-400 uppercase block">Google Account</span>
+                            <strong className="font-mono text-slate-800 dark:text-slate-200">{connectedSheet.userEmail || ADMIN_CONFIG.GOOGLE.GMAIL_ID}</strong>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-400 uppercase block">Spreadsheet ID</span>
+                            <strong className="font-mono text-slate-800 dark:text-slate-200 truncate block">{connectedSheet.spreadsheetId}</strong>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-400 uppercase block">Last Synced</span>
+                            <span className="font-mono text-slate-800 dark:text-slate-200">{connectedSheet.lastSyncedAt || 'Just now'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-2xl bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046]">
                         <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed">
-                          Whenever anyone fills your Google Form, this webhook streams the submission straight into this centralized Nourish Pro Admin dashboard!
+                          Clicking <strong>Auto-Connect with {ADMIN_CONFIG.GOOGLE.GMAIL_ID}</strong> will open a Google authorization window. The app will automatically find or create the spreadsheet <code className="font-mono text-emerald-700 dark:text-[#CCFF00] font-bold">"{ADMIN_CONFIG.GOOGLE.DEFAULT_SHEET_TITLE}"</code> in your Google Drive and set up automatic two-way row synchronization!
                         </p>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={handleTestWebhook}
-                        disabled={testWebhookStatus.loading}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-['Outfit'] font-bold cursor-pointer transition shadow-xs whitespace-nowrap"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>{testWebhookStatus.loading ? 'Simulating...' : 'Test Webhook Submission'}</span>
-                      </button>
-                    </div>
-
-                    {testWebhookStatus.message && (
-                      <div className="mb-4 p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-xs text-purple-800 dark:text-purple-200">
-                        {testWebhookStatus.message}
-                      </div>
                     )}
-
-                    {/* Step by Step Guide */}
-                    <div className="space-y-3 mb-4">
-                      <div className="flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">1</span>
-                        <span>Open your <strong>Google Form</strong> (or its linked Google Sheet with responses).</span>
-                      </div>
-                      <div className="flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">2</span>
-                        <span>Click <strong>Extensions</strong> → <strong>Apps Script</strong> from the top menu.</span>
-                      </div>
-                      <div className="flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">3</span>
-                        <span>Paste this code snippet and click <strong>Save</strong>:</span>
-                      </div>
-                    </div>
-
-                    {/* Code Box */}
-                    <div className="relative rounded-xl overflow-hidden bg-slate-900 text-slate-100 font-mono text-[11px] p-4 border border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(googleAppsScriptCode, setCopiedScript)}
-                        className="absolute right-3 top-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-['Outfit'] text-slate-200 transition cursor-pointer"
-                      >
-                        {copiedScript ? <Check className="w-3.5 h-3.5 text-[#CCFF00]" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{copiedScript ? 'Copied!' : 'Copy Script'}</span>
-                      </button>
-                      <pre className="overflow-x-auto whitespace-pre pr-24">
-                        {googleAppsScriptCode}
-                      </pre>
-                    </div>
-
-                    <div className="mt-3 flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-                      <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">4</span>
-                      <span>In Apps Script, click <strong>Triggers</strong> (clock icon on the left) → <strong>Add Trigger</strong> → Select <code className="font-mono bg-slate-200 dark:bg-slate-800 px-1 py-0.5 rounded">onFormSubmit</code> → Event type: <strong>On form submit</strong>.</span>
-                    </div>
                   </div>
 
-                  {/* Universal Webhook for Any Website */}
-                  <div className="p-5 sm:p-6 rounded-2xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
+                  {/* Manual Sheet URL Import (Fallback) */}
+                  <div className="p-6 rounded-3xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
                     <div className="flex items-center gap-2 mb-2">
-                      <div className="w-7 h-7 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
-                        <Globe className="w-4 h-4" />
-                      </div>
-                      <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
-                        Universal Webhook for Any Website (CORS Enabled)
+                      <FileSpreadsheet className="w-4 h-4 text-slate-500" />
+                      <h4 className="font-['Outfit'] font-black text-sm text-slate-950 dark:text-white uppercase tracking-tight">
+                        Import Any Public/Shared Google Sheet URL
                       </h4>
                     </div>
                     <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed mb-4">
-                      Any external landing page, WordPress form, Webflow site, or custom app can POST athlete submissions directly into this centralized database.
-                    </p>
-
-                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-white dark:bg-[#171E2D] border border-slate-200 dark:border-[#243046] mb-3">
-                      <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-[#CCFF00] font-mono text-[10px] font-bold uppercase">
-                        POST
-                      </span>
-                      <code className="text-xs font-mono flex-1 text-slate-800 dark:text-slate-200 truncate">
-                        {universalWebhookUrl}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(universalWebhookUrl, setCopiedWebhookUrl)}
-                        className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-[#20293D] hover:bg-slate-200 text-xs font-['Outfit'] font-bold text-slate-700 dark:text-slate-300 transition cursor-pointer"
-                      >
-                        {copiedWebhookUrl ? 'Copied!' : 'Copy URL'}
-                      </button>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#151D2C] text-[11px] text-slate-600 dark:text-[#94A3B8]">
-                      Accepts standard JSON: <code className="text-emerald-700 dark:text-[#CCFF00] font-mono">&#123; name: "Rudra", contact: "...", mainGoal: "Muscle", targetCalories: 2800 &#125;</code>.
-                    </div>
-                  </div>
-
-                  {/* Google Sheets Direct CSV Sync */}
-                  <div className="p-5 sm:p-6 rounded-2xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-7 h-7 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-[#CCFF00] flex items-center justify-center font-bold">
-                        <FileSpreadsheet className="w-4 h-4" />
-                      </div>
-                      <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
-                        Import & Sync Google Sheet Responses
-                      </h4>
-                    </div>
-                    <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed mb-4">
-                      Paste a Google Sheet URL (where responses are collected) to immediately sync and import all rows into this admin system.
+                      Alternatively, paste any Google Sheet URL (e.g. from Google Forms responses) to parse and pull submissions directly into your central view.
                     </p>
 
                     <form onSubmit={handleSyncGoogleSheet} className="flex flex-col sm:flex-row items-center gap-2">
@@ -843,7 +1081,7 @@ function onFormSubmit(e) {
                         disabled={sheetSyncStatus.loading}
                         className="w-full sm:w-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 dark:bg-[#CCFF00] dark:hover:bg-[#BAE600] text-white dark:text-slate-950 font-['Outfit'] font-black text-xs uppercase tracking-wider transition cursor-pointer shadow-xs whitespace-nowrap"
                       >
-                        {sheetSyncStatus.loading ? 'Syncing...' : 'Sync Google Sheet Now'}
+                        {sheetSyncStatus.loading ? 'Syncing...' : 'Sync Sheet URL'}
                       </button>
                     </form>
 
@@ -856,6 +1094,130 @@ function onFormSubmit(e) {
                         {sheetSyncStatus.message}
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: GOOGLE FORMS & WEBHOOKS */}
+              {activeTab === 'webhooks' && (
+                <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+                  {/* Google Forms 1-Click Link to Google Sheets Card */}
+                  <div className="p-5 sm:p-6 rounded-3xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
+                        Method 1: Connect Google Form Directly to Connected Google Sheet
+                      </h4>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed mb-4">
+                      If you already use a Google Form, you can point its responses directly to your auto-connected spreadsheet:
+                    </p>
+
+                    <div className="space-y-2.5 text-xs text-slate-700 dark:text-slate-300 mb-4 p-4 rounded-2xl bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#243046]">
+                      <div className="flex items-start gap-2">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">1</span>
+                        <span>Open your Google Form and go to the <strong>Responses</strong> tab.</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">2</span>
+                        <span>Click <strong>Link to Sheets</strong> (the green sheets icon).</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-[#1E2638] flex items-center justify-center font-bold text-[11px] shrink-0">3</span>
+                        <span>Select <strong>"Select existing spreadsheet"</strong> and choose <code className="font-mono text-emerald-700 dark:text-[#CCFF00] font-bold">"{ADMIN_CONFIG.GOOGLE.DEFAULT_SHEET_TITLE}"</code>.</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-[#CCFF00] flex items-center justify-center font-bold text-[11px] shrink-0">✓</span>
+                        <span>Done! Every Google Form response will immediately write to your Google Sheet and auto-populate this Admin dashboard.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Method 2: Google Apps Script Webhook */}
+                  <div className="p-5 sm:p-6 rounded-3xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="w-7 h-7 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold">
+                            <Radio className="w-4 h-4" />
+                          </div>
+                          <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
+                            Method 2: Real-Time Google Apps Script Webhook
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed">
+                          Whenever a user fills your Google Form, Apps Script fires an immediate HTTP POST to this central dashboard.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTestWebhook}
+                        disabled={testWebhookStatus.loading}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-['Outfit'] font-bold cursor-pointer transition shadow-xs whitespace-nowrap"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{testWebhookStatus.loading ? 'Simulating...' : 'Test Webhook'}</span>
+                      </button>
+                    </div>
+
+                    {testWebhookStatus.message && (
+                      <div className="mb-4 p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-xs text-purple-800 dark:text-purple-200">
+                        {testWebhookStatus.message}
+                      </div>
+                    )}
+
+                    {/* Code Box */}
+                    <div className="relative rounded-2xl overflow-hidden bg-slate-900 text-slate-100 font-mono text-[11px] p-4 border border-slate-800 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(googleAppsScriptCode, setCopiedScript)}
+                        className="absolute right-3 top-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-['Outfit'] text-slate-200 transition cursor-pointer"
+                      >
+                        {copiedScript ? <Check className="w-3.5 h-3.5 text-[#CCFF00]" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedScript ? 'Copied!' : 'Copy Script'}</span>
+                      </button>
+                      <pre className="overflow-x-auto whitespace-pre pr-24">
+                        {googleAppsScriptCode}
+                      </pre>
+                    </div>
+
+                    <p className="text-xs text-slate-500">
+                      In Google Sheet: <strong>Extensions</strong> → <strong>Apps Script</strong> → Paste code → Set trigger <strong>On form submit</strong>.
+                    </p>
+                  </div>
+
+                  {/* Universal Webhook for Any Website */}
+                  <div className="p-5 sm:p-6 rounded-3xl bg-slate-50 dark:bg-[#111724] border border-slate-200 dark:border-[#1E2638]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
+                        <Globe className="w-4 h-4" />
+                      </div>
+                      <h4 className="font-['Outfit'] font-black text-base text-slate-950 dark:text-white uppercase tracking-tight">
+                        Universal Webhook for Any External Website (CORS Enabled)
+                      </h4>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-[#94A3B8] leading-relaxed mb-4">
+                      Any external landing page, WordPress form, or custom app can POST athlete submissions directly:
+                    </p>
+
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-white dark:bg-[#171E2D] border border-slate-200 dark:border-[#243046]">
+                      <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-[#CCFF00] font-mono text-[10px] font-bold uppercase">
+                        POST
+                      </span>
+                      <code className="text-xs font-mono flex-1 text-slate-800 dark:text-slate-200 truncate">
+                        {universalWebhookUrl}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(universalWebhookUrl, setCopiedWebhookUrl)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-[#20293D] hover:bg-slate-200 text-xs font-['Outfit'] font-bold text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                      >
+                        {copiedWebhookUrl ? 'Copied!' : 'Copy URL'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -888,45 +1250,48 @@ function onFormSubmit(e) {
 
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#171E2D] flex items-center justify-between">
                     <span className="text-[10px] font-mono text-slate-400 uppercase">Submission Channel:</span>
-                    <span className="font-bold text-slate-900 dark:text-white">{selectedRecord.source || 'Nourish Pro Web'}</span>
+                    <span className="font-bold text-emerald-700 dark:text-[#CCFF00]">{selectedRecord.source || 'Nourish Pro Web'}</span>
                   </div>
 
                   {selectedRecord.notes && (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#171E2D]">
-                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Personal Intention / Notes</span>
-                      <p className="italic text-slate-800 dark:text-slate-200">“{selectedRecord.notes}”</p>
+                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Goals / Notes</span>
+                      <p className="italic text-slate-800 dark:text-slate-200 mt-0.5">{selectedRecord.notes}</p>
                     </div>
                   )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#171E2D]">
-                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Biometrics</span>
-                      <span>{selectedRecord.height || 'Ref'} cm / {selectedRecord.weight || 'Ref'} kg</span>
-                      <span className="block text-[11px] text-slate-500">{selectedRecord.activity} activity</span>
+                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Demographics</span>
+                      <span>{selectedRecord.ageGroup} • {selectedRecord.sex || 'Unspecified'}</span>
                     </div>
-
                     <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#171E2D]">
-                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Diet & Budget</span>
-                      <span>{selectedRecord.foodStyle}</span>
-                      <span className="block text-[11px] text-orange-600 dark:text-[#FF6B00]">{selectedRecord.budget}</span>
+                      <span className="text-[10px] font-mono text-slate-400 uppercase block">Body Stats</span>
+                      <span>{selectedRecord.height ? `${selectedRecord.height}cm` : 'Ref'} • {selectedRecord.weight ? `${selectedRecord.weight}kg` : 'Ref'}</span>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#171E2D]">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase block">Calibrated Target</span>
-                    <p className="text-base font-['Space_Grotesk'] font-bold text-slate-950 dark:text-white">
-                      {selectedRecord.targetCalories ? `${selectedRecord.targetCalories.toLocaleString()} kcal` : 'N/A'}
-                      {selectedRecord.proteinTarget ? ` | ~${selectedRecord.proteinTarget}g Protein` : ''}
-                    </p>
-                    <span className="text-[10px] text-slate-500 font-mono">Logged at {selectedRecord.timestamp}</span>
+                  <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-[#14221A] border border-emerald-100 dark:border-[#224424] flex items-center justify-between font-mono">
+                    <div>
+                      <span className="text-[10px] uppercase text-emerald-800 dark:text-[#CCFF00] block">Target Calories</span>
+                      <strong className="text-sm text-slate-950 dark:text-white">
+                        {selectedRecord.targetCalories ? `${selectedRecord.targetCalories} kcal` : 'N/A'}
+                      </strong>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] uppercase text-emerald-800 dark:text-[#CCFF00] block">Protein Target</span>
+                      <strong className="text-sm text-slate-950 dark:text-white">
+                        {selectedRecord.proteinTarget ? `${selectedRecord.proteinTarget}g` : 'N/A'}
+                      </strong>
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-200 dark:border-[#1E2638] flex justify-end">
+                <div className="mt-5 flex justify-end">
                   <button
                     type="button"
                     onClick={() => setSelectedRecord(null)}
-                    className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-[#1C2436] text-white text-xs font-['Outfit'] font-bold uppercase tracking-wider cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-[#1E2638] text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 cursor-pointer"
                   >
                     Close
                   </button>
@@ -935,31 +1300,33 @@ function onFormSubmit(e) {
             </div>
           )}
 
-          {/* Confirm Clear All Dialog */}
+          {/* Confirm Clear Modal */}
           {isConfirmingClear && (
             <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
-              <div className="bg-white dark:bg-[#121724] border border-red-200 dark:border-red-900/40 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
-                <AlertTriangle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-                <h4 className="font-['Outfit'] font-black text-lg text-slate-950 dark:text-white uppercase mb-1">
-                  Clear All Visitor Logs?
+              <div className="bg-white dark:bg-[#121724] border border-slate-200 dark:border-[#243046] rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
+                <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-950/30 text-red-600 flex items-center justify-center mx-auto mb-3">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <h4 className="font-['Outfit'] font-bold text-base text-slate-950 dark:text-white mb-1">
+                  Clear All Central Records?
                 </h4>
-                <p className="text-xs text-slate-600 dark:text-[#94A3B8] mb-5 leading-relaxed">
-                  This will permanently delete all centralized user interactions on the server. This action cannot be undone.
+                <p className="text-xs text-slate-500 mb-5">
+                  This will purge all user interaction logs from the central database. Connected Google Sheets will remain intact.
                 </p>
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center gap-2 justify-center">
                   <button
                     type="button"
                     onClick={() => setIsConfirmingClear(false)}
-                    className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-[#1C2436] text-slate-700 dark:text-slate-300 text-xs font-['Outfit'] font-bold cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-[#1E2638] text-xs font-['Outfit'] font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-['Outfit'] font-bold shadow-sm cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-red-600 text-white text-xs font-['Outfit'] font-bold hover:bg-red-700 transition cursor-pointer"
                   >
-                    Confirm & Wipe All
+                    Yes, Clear All
                   </button>
                 </div>
               </div>

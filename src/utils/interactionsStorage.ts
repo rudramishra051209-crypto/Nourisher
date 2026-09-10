@@ -1,4 +1,5 @@
 import { UserInteraction } from '../types';
+import { appendInteractionToGoogleSheet } from './googleSheetsService';
 
 const STORAGE_KEY = 'nourish_pro_user_interactions_v1';
 
@@ -171,6 +172,11 @@ export async function saveInteraction(
   } catch (err) {
     console.warn('Central server save failed, stored locally:', err);
   }
+
+  // 3. Background append to connected Google Sheet
+  appendInteractionToGoogleSheet(newRecord).catch((err) => {
+    console.warn('Background Google Sheet append note:', err);
+  });
 
   return newRecord;
 }
