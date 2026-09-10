@@ -1,0 +1,6 @@
+{
+  "name": "NOURISH",
+  "description": "Practical nutrition planning, workout splits, and calorie guidance by Kalash.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
