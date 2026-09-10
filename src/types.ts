@@ -28,6 +28,9 @@ export interface MealItem {
   caloriesEstimate?: string;
   macroSplit?: string;
   budgetTip?: string;
+  priceCategory?: string;
+  prepTime?: string;
+  ageSuitability?: string;
   preparationSteps: string;
   ingredients: string;
 }
@@ -36,6 +39,8 @@ export interface MealAlternative {
   name: string;
   description: string;
   styles?: string[];
+  priceCategory?: string;
+  prepTime?: string;
 }
 
 export interface CravingRecipe {
