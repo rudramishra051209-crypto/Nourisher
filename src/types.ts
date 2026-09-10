@@ -49,6 +49,8 @@ export interface CravingRecipe {
 export interface UserProfile {
   id: string;
   name?: string;
+  contact?: string;
+  notes?: string;
   ageGroup: AgeGroup;
   age: string;
   height: string;
@@ -60,6 +62,27 @@ export interface UserProfile {
   energyGoal: EnergyGoal;
   budget: BudgetTier;
   createdAt?: string;
+}
+
+export interface UserInteraction {
+  id: string;
+  timestamp: string;
+  name: string;
+  contact?: string;
+  notes?: string;
+  source?: string;
+  ageGroup: AgeGroup;
+  exactAge?: string;
+  sex?: Sex | '';
+  height?: string;
+  weight?: string;
+  activity?: ActivityLevel | '';
+  foodStyle: FoodStyle;
+  mainGoal: MainGoal;
+  energyGoal: EnergyGoal;
+  budget: BudgetTier;
+  targetCalories?: number;
+  proteinTarget?: number;
 }
 
 export interface EnergyCalculations {

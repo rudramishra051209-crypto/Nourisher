@@ -26,6 +26,7 @@ export function sanitizePdfText(str: string | undefined | null): string {
 }
 
 export interface PdfExportParams {
+  userName?: string;
   ageGroup: string;
   exactAge: string;
   height: string;
@@ -41,6 +42,7 @@ export interface PdfExportParams {
 }
 
 export function generateDietPlanPdf({
+  userName,
   ageGroup,
   exactAge,
   height,
@@ -143,10 +145,10 @@ export function generateDietPlanPdf({
   doc.setTextColor(71, 85, 105);
 
   const profileRows = [
+    userName ? `Athlete: ${sanitizePdfText(userName)}` : `Athlete: Registered User`,
     `Demographic: ${sanitizePdfText(ageGroup)} ${exactAge ? `(${exactAge} yrs)` : ''}  |  Sex: ${sex || 'Standard reference'}`,
     `Biometrics: ${height ? `${height} cm` : 'Ref height'}  |  ${weight ? `${weight} kg` : 'Ref weight'}`,
-    `Activity Level: ${sanitizePdfText(activity || 'Moderate')} training frequency`,
-    `Dietary Style: ${sanitizePdfText(foodStyle)}`,
+    `Activity Level: ${sanitizePdfText(activity || 'Moderate')}  |  Diet: ${sanitizePdfText(foodStyle)}`,
     `Energy Objective: ${sanitizePdfText(energyGoal)}`,
   ];
 

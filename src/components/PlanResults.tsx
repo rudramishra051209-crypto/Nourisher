@@ -32,6 +32,9 @@ import {
 } from 'lucide-react';
 
 interface PlanResultsProps {
+  userName?: string;
+  userContact?: string;
+  userNotes?: string;
   ageGroup: AgeGroup;
   exactAge: string;
   height: string;
@@ -46,6 +49,9 @@ interface PlanResultsProps {
 }
 
 export const PlanResults: React.FC<PlanResultsProps> = ({
+  userName,
+  userContact,
+  userNotes,
   ageGroup,
   exactAge,
   height,
@@ -118,6 +124,7 @@ export const PlanResults: React.FC<PlanResultsProps> = ({
     setIsGeneratingPdf(true);
     try {
       generateDietPlanPdf({
+        userName: userName || undefined,
         ageGroup,
         exactAge,
         height,
@@ -169,9 +176,16 @@ export const PlanResults: React.FC<PlanResultsProps> = ({
             <Sparkles className="w-3.5 h-3.5" />
             <span>DYNAMIC CALIBRATED PROTOCOL</span>
           </div>
-          <h2 className="font-['Outfit'] font-black text-2xl sm:text-3xl text-slate-950 dark:text-white tracking-tight uppercase">
-            Your Performance Blueprint
-          </h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="font-['Outfit'] font-black text-2xl sm:text-3xl text-slate-950 dark:text-white tracking-tight uppercase">
+              Your Performance Blueprint
+            </h2>
+            {userName && (
+              <span className="px-2.5 py-1 rounded-xl bg-emerald-100 dark:bg-[#CCFF00]/20 border border-emerald-300 dark:border-[#CCFF00]/40 text-emerald-900 dark:text-[#CCFF00] font-['Outfit'] font-bold text-xs uppercase tracking-wider">
+                Athlete: {userName}
+              </span>
+            )}
+          </div>
           <div className="text-xs font-mono font-semibold text-slate-600 dark:text-[#94A3B8] tracking-wide flex flex-wrap items-center gap-2 mt-1">
             <span className="text-emerald-700 dark:text-[#CCFF00] font-bold">{ageGroup}</span>
             <span>•</span>

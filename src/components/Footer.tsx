@@ -1,8 +1,12 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Zap, Heart, ArrowUp, Dumbbell, Utensils, Droplets, ShieldCheck } from 'lucide-react';
+import { Zap, Heart, ArrowUp, Dumbbell, Utensils, Droplets, ShieldCheck, Shield } from 'lucide-react';
 
-export const Footer: React.FC = () => {
+interface FooterProps {
+  onOpenAdmin?: () => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onOpenAdmin }) => {
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -86,8 +90,21 @@ export const Footer: React.FC = () => {
 
         {/* Bottom Note */}
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 dark:text-[#64748B]">
-          <div>
-            Designed & Engineered with athletic precision by <strong className="text-slate-800 dark:text-white font-['Outfit']">Kalash</strong>.
+          <div className="flex items-center gap-3">
+            <span>
+              Designed & Engineered with athletic precision by <strong className="text-slate-800 dark:text-white font-['Outfit']">Kalash</strong>.
+            </span>
+            {onOpenAdmin && (
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="inline-flex items-center gap-1 text-[11px] font-mono text-slate-400 hover:text-emerald-600 dark:hover:text-[#CCFF00] transition cursor-pointer"
+                title="Admin Section"
+              >
+                <Shield className="w-3 h-3" />
+                <span>Admin</span>
+              </button>
+            )}
           </div>
           <div className="font-mono text-[11px]">
             © {new Date().getFullYear()} NOURISH • All Rights Reserved

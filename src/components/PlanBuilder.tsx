@@ -11,9 +11,15 @@ import {
   EnergyCalculations
 } from '../types';
 import { calculatePersonalizedNutrition } from '../utils/nutritionEngine';
-import { Flame, Calculator, Check, AlertCircle, ArrowRight, Zap, Target, Gauge } from 'lucide-react';
+import { Flame, Calculator, Check, AlertCircle, ArrowRight, Zap, Target, Gauge, User, Mail } from 'lucide-react';
 
 interface PlanBuilderProps {
+  userName: string;
+  setUserName: (val: string) => void;
+  userContact: string;
+  setUserContact: (val: string) => void;
+  userNotes: string;
+  setUserNotes: (val: string) => void;
   ageGroup: AgeGroup | '';
   setAgeGroup: (val: AgeGroup | '') => void;
   exactAge: string;
@@ -39,6 +45,12 @@ interface PlanBuilderProps {
 }
 
 export const PlanBuilder: React.FC<PlanBuilderProps> = ({
+  userName,
+  setUserName,
+  userContact,
+  setUserContact,
+  userNotes,
+  setUserNotes,
   ageGroup,
   setAgeGroup,
   exactAge,
@@ -173,6 +185,68 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
         <p className="text-xs sm:text-sm text-slate-600 dark:text-[#94A3B8] mt-1">
           Select your biometric parameters and performance targets to calibrate your meal plan.
         </p>
+      </div>
+
+      {/* 0. Athlete Personal Information */}
+      <div className="mb-8 p-5 sm:p-6 rounded-2xl bg-slate-50/80 dark:bg-[#0B0E15] border border-slate-200 dark:border-[#1E2638]" id="personal-info">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-emerald-500/10 dark:bg-[#CCFF00]/15 text-emerald-700 dark:text-[#CCFF00] flex items-center justify-center font-black text-xs">
+              <User className="w-3.5 h-3.5" />
+            </div>
+            <h3 className="text-xs font-['Outfit'] font-black tracking-[0.2em] uppercase text-emerald-700 dark:text-[#CCFF00]">
+              Athlete Information
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-500 dark:text-[#64748B] font-mono">STEP 0 OF 5</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 mb-1.5 uppercase tracking-wider">
+              Full Name
+            </label>
+            <div className="relative">
+              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                placeholder="e.g., Rudra Mishra"
+                className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 mb-1.5 uppercase tracking-wider">
+              Contact (Email or Phone)
+            </label>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={userContact}
+                onChange={(e) => setUserContact(e.target.value)}
+                placeholder="e.g., rudra@example.com or +91..."
+                className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
+              />
+            </div>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 mb-1.5 uppercase tracking-wider">
+              Personal Goal / Training Notes (Optional)
+            </label>
+            <input
+              type="text"
+              value={userNotes}
+              onChange={(e) => setUserNotes(e.target.value)}
+              placeholder="e.g., Aiming for 10km run stamina, student schedule with gym 4x/week..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
+            />
+          </div>
+        </div>
       </div>
 
       {/* 1. Age Section */}

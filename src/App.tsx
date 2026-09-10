@@ -14,6 +14,7 @@ import { CravingFix } from './components/CravingFix';
 import { GymTools } from './components/GymTools';
 import { BodyFatCalculator } from './components/BodyFatCalculator';
 import { SavedPlansModal } from './components/SavedPlansModal';
+import { AdminPortal } from './components/AdminPortal';
 import { Footer } from './components/Footer';
 import { 
   UserProfile, 
@@ -26,8 +27,15 @@ import {
   BudgetTier 
 } from './types';
 import { triggerWorkoutDoneConfetti } from './utils/confetti';
+import { saveInteraction } from './utils/interactionsStorage';
+import { calculatePersonalizedNutrition } from './utils/nutritionEngine';
 
 export default function App() {
+  // Athlete personal details
+  const [userName, setUserName] = useState<string>('');
+  const [userContact, setUserContact] = useState<string>('');
+  const [userNotes, setUserNotes] = useState<string>('');
+
   // Biometric & Nutrition questionnaire state
   const [ageGroup, setAgeGroup] = useState<AgeGroup | ''>('');
   const [exactAge, setExactAge] = useState<string>('');
@@ -44,6 +52,7 @@ export default function App() {
   const [activeProfile, setActiveProfile] = useState<UserProfile | null>(null);
   const [showResults, setShowResults] = useState<boolean>(false);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState<boolean>(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
 
   const [savedProfiles, setSavedProfiles] = useState<UserProfile[]>(() => {
     try {
@@ -62,6 +71,9 @@ export default function App() {
       if (cached) {
         const parsed: UserProfile = JSON.parse(cached);
         setActiveProfile(parsed);
+        if (parsed.name && !parsed.name.includes('•')) setUserName(parsed.name);
+        if (parsed.contact) setUserContact(parsed.contact);
+        if (parsed.notes) setUserNotes(parsed.notes);
         if (parsed.ageGroup) setAgeGroup(parsed.ageGroup);
         if (parsed.age) setExactAge(parsed.age);
         if (parsed.height) setHeight(parsed.height);
@@ -102,9 +114,27 @@ export default function App() {
 
     setValidationError(null);
 
+    // Dynamic nutritional calculation for the interaction log & profile
+    const calculated = calculatePersonalizedNutrition({
+      ageGroup,
+      exactAge,
+      height,
+      weight,
+      sex,
+      activity,
+      foodStyle,
+      mainGoal,
+      energyGoal,
+      budget,
+    });
+
+    const displayName = userName.trim() || `${foodStyle} • ${mainGoal}`;
+
     const newProfile: UserProfile = {
       id: activeProfile?.id || `profile_${Date.now()}`,
-      name: `${foodStyle} • ${mainGoal}`,
+      name: displayName,
+      contact: userContact.trim(),
+      notes: userNotes.trim(),
       ageGroup,
       age: exactAge,
       height,
@@ -117,6 +147,26 @@ export default function App() {
       budget,
       createdAt: new Date().toISOString(),
     };
+
+    // Log the user interaction in the centralized admin database
+    saveInteraction({
+      name: userName.trim() || 'Anonymous Athlete',
+      contact: userContact.trim(),
+      notes: userNotes.trim(),
+      source: 'Nourish Pro Web',
+      ageGroup,
+      exactAge,
+      sex,
+      height,
+      weight,
+      activity,
+      foodStyle,
+      mainGoal,
+      energyGoal,
+      budget,
+      targetCalories: calculated.targetCalories,
+      proteinTarget: calculated.macros.protein,
+    });
 
     setActiveProfile(newProfile);
     setShowResults(true);
@@ -158,6 +208,11 @@ export default function App() {
   };
 
   const handleSelectSavedProfile = (profile: UserProfile) => {
+    if (profile.name && !profile.name.includes('•')) {
+      setUserName(profile.name);
+    }
+    if (profile.contact) setUserContact(profile.contact);
+    if (profile.notes) setUserNotes(profile.notes);
     setAgeGroup(profile.ageGroup);
     setExactAge(profile.age || '');
     setHeight(profile.height || '');
@@ -200,6 +255,7 @@ export default function App() {
           profile={activeProfile}
           savedProfilesCount={savedProfiles.length}
           onOpenSavedModal={() => setIsSavedModalOpen(true)}
+          onOpenAdmin={() => setIsAdminModalOpen(true)}
         />
 
         {/* Main Content Flow */}
@@ -209,6 +265,12 @@ export default function App() {
 
           {/* 2. Personalized Nutrition Questionnaire */}
           <PlanBuilder 
+            userName={userName}
+            setUserName={setUserName}
+            userContact={userContact}
+            setUserContact={setUserContact}
+            userNotes={userNotes}
+            setUserNotes={setUserNotes}
             ageGroup={ageGroup}
             setAgeGroup={setAgeGroup}
             exactAge={exactAge}
@@ -236,6 +298,9 @@ export default function App() {
           {/* 3. Realtime Calibrated Results & Swappable Protocol */}
           {showResults && activeProfile && (
             <PlanResults 
+              userName={userName}
+              userContact={userContact}
+              userNotes={userNotes}
               ageGroup={activeProfile.ageGroup}
               exactAge={activeProfile.age}
               height={activeProfile.height}
@@ -280,8 +345,14 @@ export default function App() {
           onDeleteProfile={handleDeleteSavedProfile}
         />
 
+        {/* Admin Intelligence & Interactions Portal */}
+        <AdminPortal 
+          isOpen={isAdminModalOpen}
+          onClose={() => setIsAdminModalOpen(false)}
+        />
+
         {/* Footer with branding and quick jump links */}
-        <Footer />
+        <Footer onOpenAdmin={() => setIsAdminModalOpen(true)} />
       </div>
     </ThemeProvider>
   );

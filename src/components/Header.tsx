@@ -10,7 +10,8 @@ import {
   Moon, 
   Percent, 
   Menu,
-  X 
+  X,
+  Shield
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -21,6 +22,7 @@ interface HeaderProps {
   savedProfilesCount?: number;
   onOpenSavedModal?: () => void;
   onOpenProfile?: () => void;
+  onOpenAdmin?: () => void;
 }
 
 const NAV_ITEMS = [
@@ -35,7 +37,8 @@ export const Header: React.FC<HeaderProps> = ({
   profile, 
   savedProfilesCount = 0, 
   onOpenSavedModal, 
-  onOpenProfile 
+  onOpenProfile,
+  onOpenAdmin
 }) => {
   const { isDark, toggleTheme } = useTheme();
   const [isScrolled, setIsScrolled] = useState(false);
@@ -320,6 +323,24 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </motion.button>
 
+          {/* Admin Intelligence Portal Button */}
+          {onOpenAdmin && (
+            <motion.button
+              type="button"
+              onClick={onOpenAdmin}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.96 }}
+              className="group flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-[#26334A] bg-white dark:bg-[#121722] hover:bg-slate-100 dark:hover:bg-[#171E2D] hover:border-emerald-500/50 dark:hover:border-[#CCFF00]/60 transition-colors shadow-sm cursor-pointer"
+              title="Admin Portal - View visitor interactions and export Excel logs"
+              aria-label="Open admin intelligence portal"
+            >
+              <Shield className="w-3.5 h-3.5 text-emerald-600 dark:text-[#CCFF00]" />
+              <span className="hidden xl:inline text-[11px] font-['Outfit'] font-black tracking-wider uppercase text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-[#CCFF00] transition-colors">
+                ADMIN
+              </span>
+            </motion.button>
+          )}
+
           {/* Mobile Hamburger Menu Toggle */}
           <motion.button
             type="button"
@@ -379,6 +400,22 @@ export const Header: React.FC<HeaderProps> = ({
                   </motion.a>
                 );
               })}
+
+              {onOpenAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    onOpenAdmin();
+                  }}
+                  className="flex items-center gap-3 p-2.5 rounded-xl border border-emerald-500/30 dark:border-[#CCFF00]/30 bg-emerald-500/10 dark:bg-[#CCFF00]/10 text-emerald-900 dark:text-[#CCFF00] text-xs font-['Outfit'] font-bold uppercase tracking-wider transition-all cursor-pointer text-left w-full mt-1"
+                >
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-600 dark:bg-[#CCFF00] text-white dark:text-slate-950">
+                    <Shield className="w-3.5 h-3.5" />
+                  </div>
+                  <span>Admin Intelligence Portal</span>
+                </button>
+              )}
             </div>
           </motion.div>
         )}
