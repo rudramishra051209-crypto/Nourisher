@@ -1,5 +1,4 @@
 import { UserInteraction } from '../types';
-import { appendInteractionToGoogleSheet } from './googleSheetsService';
 
 const STORAGE_KEY = 'nourish_pro_user_interactions_v1';
 
@@ -170,13 +169,8 @@ export async function saveInteraction(
       body: JSON.stringify(newRecord),
     });
   } catch (err) {
-    console.warn('Central server save failed, stored locally:', err);
+    console.warn('Local server save failed, stored locally in browser:', err);
   }
-
-  // 3. Background append to connected Google Sheet
-  appendInteractionToGoogleSheet(newRecord).catch((err) => {
-    console.warn('Background Google Sheet append note:', err);
-  });
 
   return newRecord;
 }
@@ -205,7 +199,7 @@ export async function deleteInteractionById(id: string): Promise<void> {
 }
 
 /**
- * Clear all interactions on the central server
+ * Clear all interactions on the local server
  */
 export async function clearAllInteractions(): Promise<void> {
   try {
@@ -219,23 +213,6 @@ export async function clearAllInteractions(): Promise<void> {
       method: 'DELETE',
     });
   } catch (err) {
-    console.warn('Failed to clear on central server:', err);
+    console.warn('Failed to clear on local server:', err);
   }
-}
-
-/**
- * Trigger sync with a Google Sheet CSV
- */
-export async function syncGoogleSheetUrl(sheetUrl: string): Promise<{
-  success: boolean;
-  message: string;
-  addedCount?: number;
-  total?: number;
-}> {
-  const res = await fetch('/api/sync-google-sheet', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sheetUrl }),
-  });
-  return res.json();
 }

@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { createServer as createViteServer } from 'vite';
 
 const app = express();
@@ -128,6 +129,25 @@ function persistInteractions() {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', recordsCount: inMemoryStore.length });
+});
+
+// Local IP and network server info
+app.get('/api/server-info', (req, res) => {
+  const interfaces = os.networkInterfaces();
+  const addresses: string[] = [];
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        addresses.push(iface.address);
+      }
+    }
+  }
+  res.json({
+    port: PORT,
+    localIps: addresses.length > 0 ? addresses : ['127.0.0.1'],
+    primaryUrl: addresses.length > 0 ? `http://${addresses[0]}:${PORT}` : `http://localhost:${PORT}`,
+    isLocal: true,
+  });
 });
 
 // Centralized GET: retrieve all interactions from all visitors
@@ -315,143 +335,6 @@ app.post('/api/webhook/form-fill', (req, res) => {
   }
 });
 
-// Google Forms / Google Apps Script Webhook
-// Handles payloads sent from Google Forms (via e.namedValues or raw JSON trigger)
-app.post('/api/webhook/google-forms', (req, res) => {
-  try {
-    let payload = req.body;
-
-    // Handle Google Apps Script e.namedValues where values are arrays e.g. { "Name": ["John"] }
-    if (payload.namedValues && typeof payload.namedValues === 'object') {
-      const flattened: Record<string, any> = {};
-      for (const [k, v] of Object.entries(payload.namedValues)) {
-        flattened[k] = Array.isArray(v) ? v[0] : v;
-      }
-      payload = flattened;
-    }
-
-    // Also handle nested items array if sent via FormResponse.getItemResponses()
-    if (Array.isArray(payload.responses)) {
-      payload.responses.forEach((resp: any) => {
-        if (resp.title && resp.response) {
-          payload[resp.title] = resp.response;
-        }
-      });
-    }
-
-    const record = normalizePayload(payload, 'Google Form');
-    inMemoryStore.unshift(record);
-    persistInteractions();
-
-    res.status(201).json({
-      success: true,
-      message: 'Google Form response captured and saved centrally',
-      interaction: record,
-      total: inMemoryStore.length,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Google Sheet Direct Sync
-// Accepts a published Google Sheet CSV URL (File -> Share -> Publish to web -> CSV)
-// Fetches the CSV, parses the rows into interactions, and merges them into central storage
-app.post('/api/sync-google-sheet', async (req, res) => {
-  try {
-    const { sheetUrl } = req.body;
-    if (!sheetUrl || typeof sheetUrl !== 'string') {
-      return res.status(400).json({ success: false, error: 'Valid sheetUrl is required' });
-    }
-
-    let csvUrl = sheetUrl.trim();
-    // Auto-convert standard Google Sheet URL to export CSV if necessary
-    if (csvUrl.includes('docs.google.com/spreadsheets') && !csvUrl.includes('output=csv')) {
-      if (csvUrl.includes('/edit')) {
-        csvUrl = csvUrl.replace(/\/edit.*$/, '/export?format=csv');
-      } else if (!csvUrl.includes('/export?format=csv')) {
-        csvUrl = `${csvUrl.replace(/\/$/, '')}/export?format=csv`;
-      }
-    }
-
-    const response = await fetch(csvUrl);
-    if (!response.ok) {
-      return res.status(400).json({
-        success: false,
-        error: `Failed to fetch Google Sheet: HTTP ${response.status} (${response.statusText}). Make sure the sheet is published or shared as Anyone with the link can view.`,
-      });
-    }
-
-    const csvText = await response.text();
-    const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length < 2) {
-      return res.status(400).json({ success: false, error: 'Google Sheet contains no data rows.' });
-    }
-
-    // Parse simple CSV (header row + data rows)
-    const parseCsvLine = (line: string): string[] => {
-      const result: string[] = [];
-      let current = '';
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          if (inQuotes && line[i + 1] === '"') {
-            current += '"';
-            i++;
-          } else {
-            inQuotes = !inQuotes;
-          }
-        } else if (char === ',' && !inQuotes) {
-          result.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      result.push(current.trim());
-      return result;
-    };
-
-    const headers = parseCsvLine(lines[0]);
-    let addedCount = 0;
-
-    for (let r = 1; r < lines.length; r++) {
-      const values = parseCsvLine(lines[r]);
-      const rowObj: Record<string, any> = {};
-      headers.forEach((header, idx) => {
-        rowObj[header] = values[idx] || '';
-      });
-
-      // Avoid adding empty rows
-      if (Object.values(rowObj).some((val) => val && String(val).trim().length > 0)) {
-        const record = normalizePayload(rowObj, 'Google Sheet Sync');
-        // Avoid duplicate by name + timestamp if already exists
-        const exists = inMemoryStore.some(
-          (item) => item.name === record.name && item.timestamp === record.timestamp
-        );
-        if (!exists) {
-          inMemoryStore.unshift(record);
-          addedCount++;
-        }
-      }
-    }
-
-    if (addedCount > 0) {
-      persistInteractions();
-    }
-
-    res.json({
-      success: true,
-      message: `Successfully synced Google Sheet! Imported ${addedCount} new submissions.`,
-      addedCount,
-      total: inMemoryStore.length,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 // Delete single interaction
 app.delete('/api/interactions/:id', (req, res) => {
   const { id } = req.params;
@@ -487,7 +370,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Centralized Nourish Server running on port ${PORT}`);
+    console.log(`Local Nourish Server running on port ${PORT} (0.0.0.0)`);
   });
 }
 
