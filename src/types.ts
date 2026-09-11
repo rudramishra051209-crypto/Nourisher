@@ -110,3 +110,35 @@ export interface WorkoutDayPlan {
   title: string;
   exercises: { name: string; setsReps: string }[];
 }
+
+export interface ExcelServerStatus {
+  fileName: string;
+  filePath: string;
+  exists: boolean;
+  totalRecords: number;
+  fileSizeBytes: number;
+  lastModified?: string;
+  downloadUrl: string;
+}
+
+export interface ExcelMappedAthlete {
+  rowNumber: number;
+  id: string;
+  name: string;
+  contact: string;
+  notes?: string;
+  ageGroup?: string;
+  exactAge?: string;
+  sex?: string;
+  height?: string;
+  weight?: string;
+  activity?: string;
+  foodStyle?: string;
+  mainGoal?: string;
+  energyGoal?: string;
+  budget?: string;
+  targetCalories?: number;
+  proteinTarget?: number;
+  timestamp?: string;
+  source?: string;
+}

@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UserInteraction } from '../types';
+import { UserInteraction, ExcelServerStatus } from '../types';
 import { ADMIN_CONFIG } from '../config/adminConfig';
 import { 
   fetchCentralizedInteractions, 
   deleteInteractionById, 
-  clearAllInteractions 
+  clearAllInteractions,
+  fetchExcelServerStatus,
+  triggerServerExcelPush,
+  downloadServerExcelFile
 } from '../utils/interactionsStorage';
 import { exportInteractionsToExcel } from '../utils/excelExporter';
 import { 
@@ -29,7 +32,10 @@ import {
   Check,
   Table,
   SlidersHorizontal,
-  Info
+  Info,
+  Download,
+  FolderSync,
+  HardDrive
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -62,13 +68,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
   const [isConfirmingClear, setIsConfirmingClear] = useState<boolean>(false);
   const [exportSuccess, setExportSuccess] = useState<boolean>(false);
 
-  // Fetch data from local server
+  // Central Server Excel state
+  const [excelStatus, setExcelStatus] = useState<ExcelServerStatus | null>(null);
+  const [isPushingExcel, setIsPushingExcel] = useState<boolean>(false);
+  const [pushExcelMessage, setPushExcelMessage] = useState<string | null>(null);
+
+  // Fetch data from local server and Excel status
   const refreshData = async () => {
     setIsLoading(true);
     try {
-      const result = await fetchCentralizedInteractions();
-      setInteractions(result.interactions);
-      setIsServerConnected(result.isServerConnected);
+      const [interactionsResult, excelResult] = await Promise.all([
+        fetchCentralizedInteractions(),
+        fetchExcelServerStatus(),
+      ]);
+      setInteractions(interactionsResult.interactions);
+      setIsServerConnected(interactionsResult.isServerConnected);
+      if (excelResult) {
+        setExcelStatus(excelResult);
+      }
     } catch (err) {
       console.error('Refresh error:', err);
     } finally {
@@ -146,6 +163,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
     exportInteractionsToExcel(filteredInteractions);
     setExportSuccess(true);
     setTimeout(() => setExportSuccess(false), 3000);
+  };
+
+  const handleDownloadServerExcel = () => {
+    downloadServerExcelFile();
+    setExportSuccess(true);
+    setTimeout(() => setExportSuccess(false), 3000);
+  };
+
+  const handlePushCentralExcel = async () => {
+    setIsPushingExcel(true);
+    setPushExcelMessage(null);
+    try {
+      const res = await triggerServerExcelPush(interactions);
+      if (res.success) {
+        setPushExcelMessage(`Pushed ${res.totalRecords} records directly to athlete_nutrition_data.xlsx in project root`);
+        const status = await fetchExcelServerStatus();
+        if (status) setExcelStatus(status);
+      } else {
+        setPushExcelMessage('Server push encountered an issue');
+      }
+    } catch {
+      setPushExcelMessage('Failed to push to server Excel');
+    } finally {
+      setIsPushingExcel(false);
+      setTimeout(() => setPushExcelMessage(null), 4000);
+    }
   };
 
   const copyLocalAddress = (text: string) => {
@@ -487,6 +530,61 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
                 </div>
               </div>
 
+              {/* Central Server Excel File Synchronization Banner */}
+              <div className="mx-4 sm:mx-5 mt-4 p-4 rounded-2xl bg-emerald-500/5 dark:bg-[#CCFF00]/5 border border-emerald-500/20 dark:border-[#CCFF00]/20 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 dark:bg-[#CCFF00]/10 text-emerald-600 dark:text-[#CCFF00] flex items-center justify-center shrink-0 border border-emerald-500/20 dark:border-[#CCFF00]/30 mt-0.5">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-['Outfit'] font-black text-sm text-slate-950 dark:text-white uppercase tracking-tight">
+                        Central Server Excel File
+                      </span>
+                      <code className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#24334A] text-emerald-700 dark:text-[#CCFF00]">
+                        ./athlete_nutrition_data.xlsx
+                      </code>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-[#CCFF00]/15 text-emerald-800 dark:text-[#CCFF00]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-[#CCFF00] animate-ping" />
+                        Live Push Enabled
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-[#94A3B8] mt-1 leading-relaxed">
+                      All athlete submissions from the website and external webhooks automatically append directly to the Excel spreadsheet in your main project directory.
+                    </p>
+                    {pushExcelMessage && (
+                      <p className="text-xs font-bold text-emerald-700 dark:text-[#CCFF00] mt-1.5 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {pushExcelMessage}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 w-full md:w-auto">
+                  <button
+                    type="button"
+                    onClick={handlePushCentralExcel}
+                    disabled={isPushingExcel}
+                    className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white dark:bg-[#161F2E] border border-slate-300 dark:border-[#28374E] text-xs font-['Outfit'] font-bold text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:border-slate-400 transition cursor-pointer"
+                    title="Force refresh the Excel file in the main code directory"
+                  >
+                    <FolderSync className={`w-3.5 h-3.5 text-emerald-600 dark:text-[#CCFF00] ${isPushingExcel ? 'animate-spin' : ''}`} />
+                    <span>{isPushingExcel ? 'Pushing...' : 'Force Sync Workbook'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadServerExcel}
+                    className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 dark:bg-[#CCFF00] dark:hover:bg-[#BAE600] text-white dark:text-slate-950 font-['Outfit'] font-black text-xs uppercase tracking-wider transition cursor-pointer shadow-sm"
+                    title="Download the actual athlete_nutrition_data.xlsx file generated by the server"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Server Excel</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Submissions Table View */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-5">
                 {filteredInteractions.length === 0 ? (
@@ -532,8 +630,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose }) => 
                               </td>
 
                               <td className="py-3 px-4">
-                                <div className="font-['Outfit'] font-bold text-sm text-slate-950 dark:text-white">
-                                  {item.name}
+                                <div className="flex items-center gap-2">
+                                  <span className="font-['Outfit'] font-bold text-sm text-slate-950 dark:text-white">
+                                    {item.name}
+                                  </span>
+                                  {item.excelRow ? (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-100 dark:bg-[#1B2436] text-slate-600 dark:text-[#94A3B8] border border-slate-200 dark:border-[#27354E]">
+                                      Row #{item.excelRow}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-50 dark:bg-[#CCFF00]/10 text-emerald-800 dark:text-[#CCFF00]">
+                                      Excel Mapped
+                                    </span>
+                                  )}
                                 </div>
                                 {item.contact && (
                                   <div className="text-[11px] text-emerald-700 dark:text-[#CCFF00] font-mono flex items-center gap-1 mt-0.5">

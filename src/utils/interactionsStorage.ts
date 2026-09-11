@@ -1,4 +1,4 @@
-import { UserInteraction } from '../types';
+import { UserInteraction, ExcelServerStatus, ExcelMappedAthlete } from '../types';
 
 const STORAGE_KEY = 'nourish_pro_user_interactions_v1';
 
@@ -215,4 +215,85 @@ export async function clearAllInteractions(): Promise<void> {
   } catch (err) {
     console.warn('Failed to clear on local server:', err);
   }
+}
+
+/**
+ * Fetch status of the central Excel file stored in the project directory
+ */
+export async function fetchExcelServerStatus(): Promise<ExcelServerStatus | null> {
+  try {
+    const res = await fetch('/api/excel/status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Failed to fetch Excel server status:', err);
+  }
+  return null;
+}
+
+/**
+ * Manually force-push current interaction records to the central Excel file in the main code directory
+ */
+export async function triggerServerExcelPush(
+  interactions?: UserInteraction[]
+): Promise<{ success: boolean; message: string; totalRecords: number }> {
+  try {
+    const body = interactions ? { interactions } : {};
+    const res = await fetch('/api/excel/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err: any) {
+    console.warn('Failed to trigger server Excel push:', err);
+    return { success: false, message: err.message || 'Server error', totalRecords: 0 };
+  }
+  return { success: false, message: 'Server responded with error', totalRecords: 0 };
+}
+
+/**
+ * Directly download the central Excel file generated on the server
+ */
+export function downloadServerExcelFile(): void {
+  const link = document.createElement('a');
+  link.href = '/api/excel/download';
+  link.setAttribute('download', 'athlete_nutrition_data.xlsx');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+/**
+ * Fetch registered athlete names and profiles live-read from the Excel sheet
+ */
+export async function fetchLiveExcelAthletes(): Promise<ExcelMappedAthlete[]> {
+  try {
+    const res = await fetch('/api/athletes/names');
+    if (res.ok) {
+      const data = await res.json();
+      return data.athletes || [];
+    }
+  } catch (err) {
+    console.warn('Failed to fetch live Excel athletes:', err);
+  }
+  return [];
+}
+
+/**
+ * Fetch all raw records live-read and mapped from the Excel sheet
+ */
+export async function fetchLiveExcelRecords(): Promise<{ fileName: string; total: number; records: any[] } | null> {
+  try {
+    const res = await fetch('/api/excel/records');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Failed to fetch live Excel records:', err);
+  }
+  return null;
 }

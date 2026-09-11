@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AgeGroup, 
@@ -8,10 +8,12 @@ import {
   MainGoal, 
   EnergyGoal, 
   BudgetTier,
-  EnergyCalculations
+  EnergyCalculations,
+  ExcelMappedAthlete
 } from '../types';
 import { calculatePersonalizedNutrition } from '../utils/nutritionEngine';
-import { Flame, Calculator, Check, AlertCircle, ArrowRight, Zap, Target, Gauge, User, Mail } from 'lucide-react';
+import { fetchLiveExcelAthletes } from '../utils/interactionsStorage';
+import { Flame, Calculator, Check, AlertCircle, ArrowRight, Zap, Target, Gauge, User, Mail, FileSpreadsheet, Sparkles } from 'lucide-react';
 
 interface PlanBuilderProps {
   userName: string;
@@ -78,6 +80,38 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
     type: 'teen' | 'missing' | 'success';
     data?: EnergyCalculations;
   } | null>(null);
+
+  const [excelAthletes, setExcelAthletes] = useState<ExcelMappedAthlete[]>([]);
+  const [selectedExcelAthlete, setSelectedExcelAthlete] = useState<ExcelMappedAthlete | null>(null);
+
+  // Live-load registered names from the Excel file on mount
+  useEffect(() => {
+    let isMounted = true;
+    fetchLiveExcelAthletes().then((athletes) => {
+      if (isMounted && athletes && athletes.length > 0) {
+        setExcelAthletes(athletes);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleSelectExcelAthlete = (athlete: ExcelMappedAthlete) => {
+    setSelectedExcelAthlete(athlete);
+    setUserName(athlete.name);
+    if (athlete.contact) setUserContact(athlete.contact);
+    if (athlete.notes) setUserNotes(athlete.notes);
+    if (athlete.exactAge) setExactAge(athlete.exactAge);
+    if (athlete.height) setHeight(athlete.height);
+    if (athlete.weight) setWeight(athlete.weight);
+    if (athlete.sex) setSex(athlete.sex as Sex);
+    if (athlete.activity) setActivity(athlete.activity as ActivityLevel);
+    if (athlete.foodStyle) setFoodStyle(athlete.foodStyle as FoodStyle);
+    if (athlete.mainGoal) setMainGoal(athlete.mainGoal as MainGoal);
+    if (athlete.energyGoal) setEnergyGoal(athlete.energyGoal as EnergyGoal);
+    if (athlete.budget) setBudget(athlete.budget as BudgetTier);
+  };
 
   const calculateEnergy = () => {
     if (ageGroup === '13–17') {
@@ -198,24 +232,92 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
               Athlete Information
             </h3>
           </div>
-          <span className="text-[11px] text-slate-500 dark:text-[#64748B] font-mono">STEP 0 OF 5</span>
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-[#CCFF00]/15 text-emerald-800 dark:text-[#CCFF00]">
+              <FileSpreadsheet className="w-3 h-3" />
+              Live Excel Mapped
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-[#64748B] font-mono">STEP 0 OF 5</span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 mb-1.5 uppercase tracking-wider">
-              Full Name
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-['Outfit'] font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                Full Name
+              </label>
+              {excelAthletes.length > 0 && (
+                <span className="text-[10px] font-mono text-emerald-600 dark:text-[#CCFF00]">
+                  {excelAthletes.length} in Excel registry
+                </span>
+              )}
+            </div>
             <div className="relative">
               <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
+                list="excel-athletes-datalist"
                 value={userName}
-                onChange={(e) => setUserName(e.target.value)}
+                onChange={(e) => {
+                  setUserName(e.target.value);
+                  const matched = excelAthletes.find(
+                    (a) => a.name.toLowerCase() === e.target.value.trim().toLowerCase()
+                  );
+                  if (matched) {
+                    setSelectedExcelAthlete(matched);
+                  }
+                }}
                 placeholder="e.g., David Miller"
                 className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white dark:bg-[#141A26] border border-slate-300 dark:border-[#243046] text-sm text-slate-950 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 dark:focus:border-[#CCFF00] transition"
               />
+              <datalist id="excel-athletes-datalist">
+                {excelAthletes.map((athlete) => (
+                  <option
+                    key={athlete.id || athlete.rowNumber}
+                    value={athlete.name}
+                    label={`Row #${athlete.rowNumber} • ${athlete.mainGoal || 'Athlete'}`}
+                  />
+                ))}
+              </datalist>
             </div>
+
+            {/* Registered names chips from Excel */}
+            {excelAthletes.length > 0 && !userName && (
+              <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-slate-500 dark:text-[#64748B] flex items-center gap-1 font-mono">
+                  <Sparkles className="w-2.5 h-2.5 text-emerald-500 dark:text-[#CCFF00]" />
+                  Excel names:
+                </span>
+                {excelAthletes.slice(0, 3).map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => handleSelectExcelAthlete(a)}
+                    className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-white dark:bg-[#151D2C] border border-slate-200 dark:border-[#24334A] text-slate-700 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-[#CCFF00] hover:border-emerald-400 transition cursor-pointer"
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Mapped profile notification */}
+            {selectedExcelAthlete && userName === selectedExcelAthlete.name && (
+              <div className="mt-2 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-[#CCFF00]/10 border border-emerald-200 dark:border-[#CCFF00]/25 flex items-center justify-between text-[11px] text-emerald-900 dark:text-[#CCFF00]">
+                <span className="flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600 dark:text-[#CCFF00]" />
+                  Mapped from Excel Row #{selectedExcelAthlete.rowNumber}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleSelectExcelAthlete(selectedExcelAthlete)}
+                  className="font-bold underline hover:opacity-80 cursor-pointer"
+                >
+                  Re-apply All Biometrics
+                </button>
+              </div>
+            )}
           </div>
 
           <div>
